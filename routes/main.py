@@ -2,13 +2,8 @@ from flask import Blueprint, render_template, request
 import geopandas as gpd
 import pandas as pd
 import folium
-import datetime
-from shapely.geometry import Point
 from folium.plugins.treelayercontrol import TreeLayerControl
-import itertools
 import os
-from matplotlib.colors import to_rgb, to_hex
-from utils.helpers import darken_color
 
 main_bp = Blueprint("main", __name__)
 
