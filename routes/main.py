@@ -210,7 +210,7 @@ def mapa():
             facultades_por_nivel[nivel][fac] = sorted(facultades_por_nivel[nivel][fac])
 
     return render_template(
-        "universidades.html",
+        "index.html",
         mapa=m.get_root().render(),
         map_name=m.get_name(),
         periodos=periodos,
