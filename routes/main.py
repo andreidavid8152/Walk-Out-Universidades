@@ -1,43 +1,57 @@
 from flask import Blueprint, render_template, request
+import geopandas as gpd
+import pandas as pd
 import folium
 from folium.plugins.treelayercontrol import TreeLayerControl
-import pandas as pd
-from . import data_cache
+import os
 
 main_bp = Blueprint("main", __name__)
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "..", "data")
+
+EXCEL_PATH = os.path.join(DATA_DIR, "universidades_colegios.xlsx")
+SHEET_UNI = "Universidades"
+CSV_EST = os.path.join(DATA_DIR, "ubicacionEstudiantesPeriodo.csv")
+GJSON_RURAL = os.path.join(DATA_DIR, "parroquiasRurales.geojson")
+GJSON_URB = os.path.join(DATA_DIR, "parroquiasUrbanas.geojson")
+CARRERAS_PATH = os.path.join(DATA_DIR, "baseCarreras.xlsx")
+GJSON_BUSES = os.path.join(DATA_DIR, "estacionesBuses.geojson")
+GJSON_METRO = os.path.join(DATA_DIR, "estacionesMetro.geojson")
+GJSON_PARADAS_BUSES = os.path.join(DATA_DIR, "paradasBuses.geojson")
+
 @main_bp.route("/")
 def mapa():
+    # 🎯 Incluye solo lógica de parroquias + universidades + filtros
+
+    # Periodo
     selected_periodo = request.args.get("periodo")
-    df_all = data_cache.df_all
+    df_all = pd.read_csv(CSV_EST, sep=";").rename(columns={"Semestre": "periodo"})
+    df_all["periodo"] = df_all["periodo"].astype(str)
     periodos = sorted(df_all["periodo"].unique())
     if selected_periodo not in periodos:
         selected_periodo = periodos[0]
 
-    # Filtrar carreras por periodo
-    df_carr = data_cache.df_carr
-    if selected_periodo in ["202410", "202420"]:
-        df_carr_filtered = df_carr[df_carr["PERIODO"].isin([selected_periodo, "202400"])]
-    else:
-        df_carr_filtered = df_carr[df_carr["PERIODO"].isin([selected_periodo, "202520"])]
-    uni_to_carr = df_carr_filtered.groupby("UNIVERSIDAD")["CARRERA"].apply(list).to_dict()
-
     # Parroquias
-    gdf_rurales = data_cache.gdf_rurales.copy()
+    gdf_rurales = gpd.read_file(GJSON_RURAL).rename(columns={"DPA_DESPAR": "nombre"})
+    gdf_urbanas = gpd.read_file(GJSON_URB).rename(columns={"dpa_despar": "nombre"})
+    gdf_buses = gpd.read_file(GJSON_BUSES).to_crs("EPSG:4326")
+    gdf_metro = gpd.read_file(GJSON_METRO).to_crs("EPSG:4326")
+
     gdf_rurales["tipo"] = "rural"
-    gdf_urbanas = data_cache.gdf_urbanas.copy()
     gdf_urbanas["tipo"] = "urbana"
     gdf_parroquias = pd.concat(
-        [gdf_rurales[["nombre", "geometry", "tipo"]],
-         gdf_urbanas[["nombre", "geometry", "tipo"]]],
-        ignore_index=True
+        [
+            gdf_rurales[["nombre", "geometry", "tipo"]],
+            gdf_urbanas[["nombre", "geometry", "tipo"]],
+        ],
+        ignore_index=True,
     ).set_crs("EPSG:4326")
 
-    # Mapa base
+    # Mapa
     m = folium.Map(location=[-0.20, -78.50], zoom_start=11, tiles="cartodbpositron")
-
-    # Parroquias
     fg_parroquias = folium.FeatureGroup(name="Parroquias").add_to(m)
+
     for _, row in gdf_parroquias.iterrows():
         folium.GeoJson(
             {
@@ -54,9 +68,10 @@ def mapa():
             tooltip=folium.GeoJsonTooltip(fields=["nombre"], aliases=["Parroquia:"]),
         ).add_to(fg_parroquias)
 
-    # Estaciones de buses
+    # Estaciones buses
     fg_buses = folium.FeatureGroup(name="Estaciones de Buses").add_to(m)
-    for _, row in data_cache.gdf_buses.iterrows():
+
+    for _, row in gdf_buses.iterrows():
         geom = row.geometry
         folium.GeoJson(
             geom.__geo_interface__,
@@ -68,6 +83,8 @@ def mapa():
             },
             tooltip="Estación de Bus",
         ).add_to(fg_buses)
+
+        # Icono en el centro del polígono
         centroide = geom.centroid
         folium.Marker(
             location=[centroide.y, centroide.x],
@@ -75,11 +92,13 @@ def mapa():
             tooltip="Estación de Bus",
         ).add_to(fg_buses)
 
-    # Estaciones de metro
+    # Estaciones metro
     fg_metro = folium.FeatureGroup(name="Estaciones de Metro").add_to(m)
-    for _, row in data_cache.gdf_metro.iterrows():
+
+    for _, row in gdf_metro.iterrows():
         geom = row.geometry
         nombre_estacion = f"Estación de metro: {row.get('nam', 'Desconocida')}"
+
         folium.GeoJson(
             geom.__geo_interface__,
             style_function=lambda _: {
@@ -90,6 +109,8 @@ def mapa():
             },
             tooltip=nombre_estacion,
         ).add_to(fg_metro)
+
+        # Icono centrado
         centroide = geom.centroid
         folium.Marker(
             location=[centroide.y, centroide.x],
@@ -97,9 +118,11 @@ def mapa():
             tooltip=nombre_estacion,
         ).add_to(fg_metro)
 
-    # Paradas de buses (simplificadas en carga)
+    # Paradas de Buses (puntos)
+    gdf_paradas = gpd.read_file(GJSON_PARADAS_BUSES).to_crs("EPSG:4326")
     fg_paradas = folium.FeatureGroup(name="Paradas de Buses").add_to(m)
-    for _, row in data_cache.gdf_paradas.iterrows():
+
+    for _, row in gdf_paradas.iterrows():
         punto = row.geometry
         folium.CircleMarker(
             location=[punto.y, punto.x],
@@ -112,7 +135,18 @@ def mapa():
         ).add_to(fg_paradas)
 
     # Universidades
-    df_uni = data_cache.df_uni
+    df_uni = pd.read_excel(EXCEL_PATH, sheet_name=SHEET_UNI).rename(
+        columns=lambda c: c.strip()
+    )
+    df_uni["UNIVERSIDAD"] = df_uni["UNIVERSIDAD"].str.strip()
+    df_carr = pd.read_excel(CARRERAS_PATH)
+    df_carr["PERIODO"] = df_carr["PERIODO"].astype(str)
+    if selected_periodo in ["202410", "202420"]:
+        df_carr = df_carr[df_carr["PERIODO"].isin([selected_periodo, "202400"])]
+    else:
+        df_carr = df_carr[df_carr["PERIODO"].isin([selected_periodo, "202520"])]
+    uni_to_carr = df_carr.groupby("UNIVERSIDAD")["CARRERA"].apply(list).to_dict()
+
     grupo_uni_fin = {"PUBLICA": [], "PRIVADA": []}
     for tipo in ["PUBLICA", "PRIVADA"]:
         fg = folium.FeatureGroup(name=f"Universidades {tipo.title()}").add_to(m)
@@ -124,14 +158,17 @@ def mapa():
                 title=uni,
                 tooltip=f"{uni} – {row['CAMPUS']}",
                 icon=folium.Icon(
-                    color=("red" if uni.upper() == "UNIVERSIDAD DE LAS AMERICAS" else "blue"),
+                    color=(
+                        "red"
+                        if uni.upper() == "UNIVERSIDAD DE LAS AMERICAS"
+                        else "blue"
+                    ),
                     icon="university",
                     prefix="fa",
                 ),
                 careers=uni_to_carr.get(uni, []),
             ).add_to(fg)
 
-    # Tree Layer
     TreeLayerControl(
         overlay_tree=[
             {"label": "Parroquias", "layer": fg_parroquias},
@@ -153,15 +190,16 @@ def mapa():
         ]
     ).add_to(m)
 
-    # Facultades por nivel
     facultades_por_nivel = {}
-    for _, r in df_carr_filtered.iterrows():
+    for _, r in df_carr.iterrows():
         nivel = r["NIVEL"].strip().upper()
         facultad = r["FACULTAD"].strip()
         carrera = r["CARRERA"].strip()
         if facultad.upper() == "SIN REGISTRO":
             continue
-        facultades_por_nivel.setdefault(nivel, {}).setdefault(facultad, set()).add(carrera)
+        facultades_por_nivel.setdefault(nivel, {}).setdefault(facultad, set()).add(
+            carrera
+        )
     for nivel in facultades_por_nivel:
         for fac in facultades_por_nivel[nivel]:
             facultades_por_nivel[nivel][fac] = sorted(facultades_por_nivel[nivel][fac])
