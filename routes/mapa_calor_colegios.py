@@ -71,6 +71,13 @@ def mapa():
 
     df_aaa = df_col[df_col["TIPO"].str.upper() == "AAA"]
 
+    # Crear GeoDataFrame de colegios AAA
+    gdf_colegios = gpd.GeoDataFrame(
+        df_aaa,
+        geometry=gpd.points_from_xy(df_aaa["LONGITUD"], df_aaa["LATITUD"]),
+        crs="EPSG:4326"
+    )
+
     # -----------------------------------------------------------------
     # 2-C. Preparación de la grilla general (sobre el límite de parroquias)
     # -----------------------------------------------------------------
@@ -110,6 +117,7 @@ def mapa():
             gdf_buses_points[["geometry"]],
             gdf_metro_points[["geometry"]],
             gdf_paradas_points[["geometry"]],
+            gdf_colegios[["geometry"]],
         ],
         ignore_index=True,
     ).set_crs("EPSG:4326")

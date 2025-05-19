@@ -112,6 +112,7 @@ def mapa():
             gdf_buses_points[["geometry"]],
             gdf_metro_points[["geometry"]],
             gdf_paradas_points[["geometry"]],
+            gdf_empresas[["geometry"]],
         ],
         ignore_index=True,
     ).set_crs("EPSG:4326")
