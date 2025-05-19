@@ -74,21 +74,34 @@ def mapa():
     )
 
     # -----------------------------------------------------------------
-    # 2-C. Preparación de la grilla general (sobre el límite de parroquias)
+    # 2-C. Preparación de la grilla basada en la mediana del área de parroquias
     # -----------------------------------------------------------------
-    minx, miny, maxx, maxy = gdf_parroquias.total_bounds
-    cell_size = 0.02  # tamaño de celda en grados
+
+    # Reproyectar parroquias a metros para calcular áreas
+    gdf_parroquias_m = gdf_parroquias.to_crs(epsg=32717)
+    gdf_parroquias_m["area_m2"] = gdf_parroquias_m.geometry.area
+
+    # Calcular mediana de áreas
+    mediana_area_m2 = gdf_parroquias_m["area_m2"].median()
+    lado_celda_m = mediana_area_m2**0.5  # Lado de celda cuadrada en metros
+
+    # Crear grilla en CRS métrico
+    minx, miny, maxx, maxy = gdf_parroquias_m.total_bounds
 
     grid_cells = []
     x = minx
     while x < maxx:
         y = miny
         while y < maxy:
-            grid_cells.append(box(x, y, x + cell_size, y + cell_size))
-            y += cell_size
-        x += cell_size
+            cell = box(x, y, x + lado_celda_m, y + lado_celda_m)
+            grid_cells.append(cell)
+            y += lado_celda_m
+        x += lado_celda_m
 
-    gdf_grilla = gpd.GeoDataFrame(geometry=grid_cells, crs="EPSG:4326")
+    gdf_grilla = gpd.GeoDataFrame(geometry=grid_cells, crs="EPSG:32717")
+
+    # Volver a EPSG:4326 para el mapa y futuros joins
+    gdf_grilla = gdf_grilla.to_crs("EPSG:4326")
 
     # ─── 2-D. CÁLCULO DE DENSIDAD EN LA GRILLA ───────────────────────────
     # 1) Crear GeoDataFrames de puntos
@@ -155,7 +168,7 @@ def mapa():
                 else "white"
             ),
             "color": "grey",
-            "weight": 0.3,
+            "weight": 0.6,
             "fillOpacity": 0.7,
         },
         tooltip=folium.GeoJsonTooltip(
