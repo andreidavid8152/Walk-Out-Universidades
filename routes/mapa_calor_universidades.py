@@ -18,6 +18,7 @@ DATA_DIR = os.path.join(BASE_DIR, "..", "data")
 
 # Rutas de archivos
 EXCEL_PATH        = os.path.join(DATA_DIR, "universidades_colegios.xlsx")
+CARRERAS_PATH = os.path.join(DATA_DIR, "baseCarreras.xlsx")
 SHEET_UNI         = "Universidades"
 CSV_EST           = os.path.join(DATA_DIR, "ubicacionEstudiantesPeriodo.csv")
 GJSON_RURAL       = os.path.join(DATA_DIR, "parroquiasRurales.geojson")
@@ -64,6 +65,15 @@ def mapa():
     df_uni = pd.read_excel(EXCEL_PATH, sheet_name=SHEET_UNI).rename(columns=lambda c: c.strip())
     df_uni["UNIVERSIDAD"] = df_uni["UNIVERSIDAD"].str.strip()
 
+    df_carr = pd.read_excel(CARRERAS_PATH)
+    df_carr["PERIODO"] = df_carr["PERIODO"].astype(str)
+
+    # Filtrado por periodo, como en el otro código
+    if selected_periodo in ["202410", "202420"]:
+        df_carr = df_carr[df_carr["PERIODO"].isin([selected_periodo, "202400"])]
+    else:
+        df_carr = df_carr[df_carr["PERIODO"].isin([selected_periodo, "202520"])]
+
     # -----------------------------------------------------------------
     # 2-C. Preparación de la grilla general (sobre el límite de parroquias)
     # -----------------------------------------------------------------
@@ -93,7 +103,6 @@ def mapa():
     gdf_buses_points = gdf_buses_points.to_crs("EPSG:32717")
     gdf_buses_points.geometry = gdf_buses_points.geometry.centroid
     gdf_buses_points = gdf_buses_points.set_geometry("geometry").to_crs("EPSG:4326")
-
 
     gdf_metro_points = gdf_metro.copy()
     gdf_metro_points = gdf_metro_points.to_crs("EPSG:32717")
@@ -213,6 +222,8 @@ def mapa():
 
     # --- 3-D. Universidades ----------------------------------------
     grupo_uni_fin = {"PUBLICA": [], "PRIVADA": []}
+    uni_to_carr = df_carr.groupby("UNIVERSIDAD")["CARRERA"].apply(list).to_dict()
+
     for tipo in ["PUBLICA", "PRIVADA"]:
         fg_uni = folium.FeatureGroup(name=f"Universidades {tipo.title()}").add_to(m)
         grupo_uni_fin[tipo] = fg_uni
@@ -223,9 +234,15 @@ def mapa():
                 title=uni,
                 tooltip=f"{uni} – {row['CAMPUS']}",
                 icon=folium.Icon(
-                    color=("red" if uni.upper() == "UNIVERSIDAD DE LAS AMERICAS" else "blue"),
-                    icon="university", prefix="fa",
+                    color=(
+                        "red"
+                        if uni.upper() == "UNIVERSIDAD DE LAS AMERICAS"
+                        else "blue"
+                    ),
+                    icon="university",
+                    prefix="fa",
                 ),
+                careers=uni_to_carr.get(uni, []),
             ).add_to(fg_uni)
 
     # ================================================================
@@ -255,13 +272,38 @@ def mapa():
         ]
     ).add_to(m)
 
+    # ---------------- NIVEL → Facultad → Carreras ----------------
+    facultades_por_nivel = {}
+
+    for _, r in df_carr.iterrows():
+        nivel = r["NIVEL"].strip().upper()
+        facultad = r["FACULTAD"].strip()
+        carrera = r["CARRERA"].strip()
+
+        if facultad.upper() == "SIN REGISTRO":
+            continue
+
+        if nivel not in facultades_por_nivel:
+            facultades_por_nivel[nivel] = {}
+
+        if facultad not in facultades_por_nivel[nivel]:
+            facultades_por_nivel[nivel][facultad] = set()
+
+        facultades_por_nivel[nivel][facultad].add(carrera)
+
+    # Convertir sets a listas ordenadas
+    for nivel in facultades_por_nivel:
+        for fac in facultades_por_nivel[nivel]:
+            facultades_por_nivel[nivel][fac] = sorted(facultades_por_nivel[nivel][fac])
+
     # ================================================================
     # 5. RENDERIZACIÓN DE LA PLANTILLA
     # ================================================================
     return render_template(
-        "index.html",
+        "mapa_calor_universidades.html",
         mapa=m.get_root().render(),
         map_name=m.get_name(),
         periodos=periodos,
         selected_periodo=selected_periodo,
+        facultades=facultades_por_nivel,
     )

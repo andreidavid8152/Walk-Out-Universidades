@@ -274,7 +274,7 @@ def mapa():
     # 5. RENDERIZACIÓN DE LA PLANTILLA
     # ================================================================
     return render_template(
-        "index.html",
+        "mapa_calor_empresas.html",
         mapa=m.get_root().render(),
         map_name=m.get_name(),
         periodos=periodos,
