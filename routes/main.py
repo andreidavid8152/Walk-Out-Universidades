@@ -44,43 +44,45 @@ def mapa():
     # Alimentadores
     gdf_alimentadores = gpd.read_file(GJSON_ALIMENTADORES).to_crs("EPSG:4326")
 
-    # 🔹 Grilla exclusiva para alimentadores
-    minx_a, miny_a, maxx_a, maxy_a = gdf_alimentadores.total_bounds
-    cell_size_a = 0.02  # mismo tamaño que la grilla de parroquias
+    # ============================================================
+    # 🔹 1. CÁLCULO DE GRILLA PARA ALIMENTADORES
+    # ============================================================
 
+    gdf_alimentadores_m = gdf_alimentadores.to_crs(epsg=32717)
+    gdf_alimentadores_m["area_m2"] = gdf_alimentadores_m.geometry.area
+    mediana_area_alim = gdf_alimentadores_m["area_m2"].median()
+    lado_celda_alim = mediana_area_alim**0.5  # lado en metros
+
+    minx_a, miny_a, maxx_a, maxy_a = gdf_alimentadores_m.total_bounds
     grid_cells_a = []
     x = minx_a
     while x < maxx_a:
         y = miny_a
         while y < maxy_a:
-            grid_cells_a.append(box(x, y, x + cell_size_a, y + cell_size_a))
-            y += cell_size_a
-        x += cell_size_a
+            grid_cells_a.append(box(x, y, x + lado_celda_alim, y + lado_celda_alim))
+            y += lado_celda_alim
+        x += lado_celda_alim
 
-    gdf_grilla_alimentadores = gpd.GeoDataFrame(geometry=grid_cells_a, crs="EPSG:4326")
+    gdf_grilla_alimentadores = gpd.GeoDataFrame(
+        geometry=grid_cells_a, crs="EPSG:32717"
+    ).to_crs("EPSG:4326")
 
-    # 🔹 Intersección: cada celda × alimentadores
+    # Intersección y centroides alimentadores
     gdf_grid_alim = gpd.overlay(
-        gdf_grilla_alimentadores[['geometry']],
-        gdf_alimentadores[['geometry', 'alimentadorid']],
-        how='intersection'
-    ).set_crs("EPSG:4326")
+        gdf_grilla_alimentadores[["geometry"]],
+        gdf_alimentadores[["geometry", "alimentadorid"]],
+        how="intersection",
+    ).explode(ignore_index=True)
 
-    # 🔹 Explosión y centroides
-    gdf_grid_alim = gdf_grid_alim.explode(ignore_index=True)
+    gdf_grid_alim = gdf_grid_alim[gdf_grid_alim.geometry.geom_type == "Polygon"]
+    gdf_grid_alim["area_m2"] = gdf_grid_alim.to_crs("EPSG:32717").area
+    gdf_grid_alim = gdf_grid_alim[gdf_grid_alim["area_m2"] > 25]
 
-    # 🧹  Filtrar geometrías fantasma -----------------------------
-    gdf_grid_alim = gdf_grid_alim[gdf_grid_alim.geometry.geom_type == "Polygon"]           # solo polígonos
-    gdf_grid_alim["area_m2"] = gdf_grid_alim.to_crs("EPSG:32717").area                     # área en m²
-    gdf_grid_alim = gdf_grid_alim[gdf_grid_alim["area_m2"] > 25]                           # umbral (ajústalo)
-    # -------------------------------------------------------------
-
-    gdf_grid_alim_proj = gdf_grid_alim.to_crs("EPSG:32717")        # proyección métrica
-    gdf_grid_alim["centroide"] = (                                 # punto garantizado interior
-        gdf_grid_alim_proj.representative_point()
-                    .to_crs("EPSG:4326")                        # regreso a lat/lon
+    gdf_grid_alim_proj = gdf_grid_alim.to_crs("EPSG:32717")
+    gdf_grid_alim["centroide"] = gdf_grid_alim_proj.representative_point().to_crs(
+        "EPSG:4326"
     )
-    gdf_grid_alim = gdf_grid_alim[                                 # asegura que el punto esté dentro
+    gdf_grid_alim = gdf_grid_alim[
         gdf_grid_alim.apply(lambda r: r.geometry.contains(r["centroide"]), axis=1)
     ]
 
@@ -99,6 +101,39 @@ def mapa():
         ],
         ignore_index=True,
     ).set_crs("EPSG:4326")
+
+    # ============================================================
+    # 🔹 2. CÁLCULO DE GRILLA PARA PARROQUIAS
+    # ============================================================
+
+    gdf_parroquias_m = gdf_parroquias.to_crs(epsg=32717)
+    gdf_parroquias_m["area_m2"] = gdf_parroquias_m.geometry.area
+    mediana_area_parr = gdf_parroquias_m["area_m2"].median()
+    lado_celda_parr = mediana_area_parr**0.5  # lado en metros
+
+    minx_p, miny_p, maxx_p, maxy_p = gdf_parroquias_m.total_bounds
+    grid_cells_p = []
+    x = minx_p
+    while x < maxx_p:
+        y = miny_p
+        while y < maxy_p:
+            grid_cells_p.append(box(x, y, x + lado_celda_parr, y + lado_celda_parr))
+            y += lado_celda_parr
+        x += lado_celda_parr
+
+    gdf_grilla = gpd.GeoDataFrame(geometry=grid_cells_p, crs="EPSG:32717").to_crs(
+        "EPSG:4326"
+    )
+
+    # Intersección celda × parroquia
+    gdf_grid_parr = gpd.overlay(
+        gdf_grilla[["geometry"]],
+        gdf_parroquias[["geometry", "nombre"]],
+        how="intersection",
+    ).explode(ignore_index=True)
+
+    gdf_grid_parr_proj = gdf_grid_parr.to_crs("EPSG:32717")
+    gdf_grid_parr["centroide"] = gdf_grid_parr_proj.centroid.to_crs("EPSG:4326")
 
     # Mapa
     m = folium.Map(location=[-0.20, -78.50], zoom_start=11, tiles="cartodbpositron")
@@ -149,37 +184,6 @@ def mapa():
             fill_opacity=0.9,
             tooltip=f"Centroide {nombre}",
         ).add_to(fg_centroides_alim)
-
-    # Generar grilla a partir de los límites de las parroquias
-    minx, miny, maxx, maxy = gdf_parroquias.total_bounds
-    cell_size = 0.02  # tamaño de celda en grados
-
-    grid_cells = []
-    x = minx
-    while x < maxx:
-        y = miny
-        while y < maxy:
-            grid_cells.append(box(x, y, x + cell_size, y + cell_size))
-            y += cell_size
-        x += cell_size
-
-    gdf_grilla = gpd.GeoDataFrame(geometry=grid_cells, crs="EPSG:4326")
-
-    # 1) Intersección: cada celda × cada parroquia
-    gdf_grid_parr = gpd.overlay(
-        gdf_grilla[['geometry']],
-        gdf_parroquias[['geometry','nombre']],   # si quieres conservar el nombre
-        how='intersection'
-    ).set_crs("EPSG:4326")
-
-    # 1.1) Explotar MultiPolygons en piezas simples
-    #    - GeoPandas ≥ 0.10: explode(ignore_index=True)
-    #    - GeoPandas < 0.10: explode() + reset_index(drop=True)
-    gdf_grid_parr = gdf_grid_parr.explode(ignore_index=True)
-
-    # 2) Reproyectar y calcular centroides por pieza
-    gdf_grid_parr_proj = gdf_grid_parr.to_crs("EPSG:32717")
-    gdf_grid_parr['centroide'] = gdf_grid_parr_proj.centroid.to_crs("EPSG:4326")
 
     # Estaciones buses
     fg_buses = folium.FeatureGroup(name="Estaciones de Buses", show=False).add_to(m)
