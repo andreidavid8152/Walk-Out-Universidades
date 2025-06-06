@@ -100,8 +100,6 @@
     const mapObj = window["{{ map_name }}"];  
 
     if (mapObj) {
-      mapObj.scrollWheelZoom.disable();  // desactiva zoom con rueda
-      mapObj.dragging.disable();         // desactiva movimiento
       mapObj.zoomControl.remove();       // oculta botones de zoom
     }
   });
